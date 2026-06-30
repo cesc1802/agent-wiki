@@ -1,0 +1,35 @@
+# schema.yaml — single source of truth for wiki page frontmatter.
+#
+# The nvtwiki validator loads this file at runtime; CLAUDE.md references it.
+# Do not encode the frontmatter rules anywhere else (see decision 0011).
+
+# Page base names that are exempt from frontmatter validation.
+exempt:
+  - index.md
+  - log.md
+
+fields:
+  title:
+    type: string
+    required: true
+  type:
+    type: enum
+    required: true
+    values: [entity, concept, source, synthesis, overview]
+  status:
+    type: enum
+    required: true
+    values: [active, superseded, archived]
+  superseded_by:
+    type: string
+    required: true
+    nullable: true
+  sources:
+    type: list
+    required: true
+  created:
+    type: date
+    required: true
+  updated:
+    type: date
+    required: true

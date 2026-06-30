@@ -90,6 +90,10 @@ assets/
 # Exception: use-mcp ships a persistent tool catalog at assets/tools.json
 !claude/skills/use-mcp/assets/
 !claude/skills/use-mcp/assets/**
+# Exception: the Go CLI embeds scaffold templates via //go:embed assets, so
+# these must be tracked or the embed matches nothing and CI typecheck fails.
+!/app/internal/scaffold/assets/
+!/app/internal/scaffold/assets/**
 
 # External repos for study/reference
 external/
