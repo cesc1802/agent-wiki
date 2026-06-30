@@ -345,12 +345,14 @@ func ingestCmd() *cobra.Command {
 				return err
 			}
 
+			fmt.Printf("ingesting %s — agent working...\n", rawRel)
 			res, runErr := orchestrate.Run(cmd.Context(), orchestrate.Request{
 				Prompt:       orchestrate.IngestPrompt(rawRel),
 				Profile:      orchestrate.Ingest,
 				WorkDir:      root.WikiDir(),
 				MaxTurns:     maxTurns,
 				MaxBudgetUSD: budget,
+				OnActivity:   printActivity,
 			})
 			if res != nil {
 				fmt.Println(res.Text)
@@ -462,6 +464,15 @@ func gate(root *kb.Root) (bool, error) {
 		fmt.Printf("  lint %s\n", f.String())
 	}
 	return problems == 0 && len(findings) == 0, nil
+}
+
+// printActivity renders one agent step as a live progress line during a run.
+func printActivity(a orchestrate.Activity) {
+	if a.Target != "" {
+		fmt.Printf("  · %s %s\n", a.Tool, a.Target)
+	} else {
+		fmt.Printf("  · %s\n", a.Tool)
+	}
 }
 
 func printRunStats(res *orchestrate.Result, profile string) {

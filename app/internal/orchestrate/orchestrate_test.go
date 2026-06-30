@@ -13,7 +13,8 @@ func TestBuildArgsQuery(t *testing.T) {
 	got := argString(args)
 	for _, want := range []string{
 		"-p what is X?",
-		"--output-format json",
+		"--output-format stream-json",
+		"--verbose",
 		"--max-turns 6",
 		"--allowedTools Read,Glob,Grep",
 		"--disallowedTools Write,Edit,MultiEdit,Bash,WebFetch,WebSearch",
@@ -85,6 +86,62 @@ func TestParseResultEmpty(t *testing.T) {
 func TestParseResultBadJSON(t *testing.T) {
 	if _, err := ParseResult([]byte("not json")); err == nil {
 		t.Fatal("expected parse error")
+	}
+}
+
+func TestHandleStreamLineAssistantToolUse(t *testing.T) {
+	line := []byte(`{"type":"assistant","message":{"content":[` +
+		`{"type":"text","text":"writing the page"},` +
+		`{"type":"tool_use","name":"Write","input":{"file_path":"sources/plan.md"}}]}}`)
+	var got []Activity
+	rl := handleStreamLine(line, func(a Activity) { got = append(got, a) })
+	if rl != nil {
+		t.Errorf("assistant line should not be a result line, got %q", rl)
+	}
+	if len(got) != 1 || got[0].Tool != "Write" || got[0].Target != "sources/plan.md" {
+		t.Errorf("unexpected activity: %#v", got)
+	}
+}
+
+func TestHandleStreamLineResult(t *testing.T) {
+	line := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"done"}` + "\n")
+	rl := handleStreamLine(line, func(Activity) { t.Fatal("result line must not emit activity") })
+	res, err := ParseResult(rl)
+	if err != nil {
+		t.Fatalf("result line did not parse: %v", err)
+	}
+	if res.Text != "done" {
+		t.Errorf("text = %q", res.Text)
+	}
+}
+
+func TestHandleStreamLineIgnoresNoise(t *testing.T) {
+	for _, line := range [][]byte{
+		[]byte("   \n"),
+		[]byte("not json"),
+		[]byte(`{"type":"system","subtype":"init"}`),
+	} {
+		if rl := handleStreamLine(line, func(Activity) { t.Fatalf("noise emitted activity: %q", line) }); rl != nil {
+			t.Errorf("noise treated as result: %q", line)
+		}
+	}
+}
+
+func TestBestTarget(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{`{"file_path":"a.md","content":"x"}`, "a.md"},
+		{`{"pattern":"foo"}`, "foo"},
+		{`{"query":"bar"}`, "bar"},
+		{`{"unrelated":"z"}`, ""},
+		{`{}`, ""},
+	}
+	for _, c := range cases {
+		if got := bestTarget([]byte(c.input)); got != c.want {
+			t.Errorf("bestTarget(%s) = %q, want %q", c.input, got, c.want)
+		}
 	}
 }
 

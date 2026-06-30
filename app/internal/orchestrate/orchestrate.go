@@ -8,6 +8,7 @@
 package orchestrate
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -58,6 +59,17 @@ type Request struct {
 	WorkDir      string  // KB root; claude runs here so hooks + CLAUDE.md apply
 	MaxTurns     int     // 0 = leave to claude's default
 	MaxBudgetUSD float64 // 0 = no ceiling
+	// OnActivity, if set, is called for each tool the agent invokes as the run
+	// streams, giving the caller live progress. It must not block for long.
+	OnActivity func(Activity)
+}
+
+// Activity is one observable agent step surfaced from the event stream: the
+// tool the agent invoked and a best-effort target (the file path or query it
+// acted on, empty when none applies).
+type Activity struct {
+	Tool   string
+	Target string
 }
 
 // Result is the parsed outcome of a `claude -p --output-format json` run.
@@ -80,7 +92,10 @@ var ErrClaudeNotFound = errors.New("claude executable not found on PATH (install
 // BuildArgs renders the claude CLI arguments for a request. It is pure so the
 // command line can be asserted in tests without invoking claude.
 func BuildArgs(req Request) []string {
-	args := []string{"-p", req.Prompt, "--output-format", "json"}
+	// stream-json emits one JSON event per line as the agent works (instead of a
+	// single buffered object at the end), which is what lets Run report live
+	// progress. --verbose is required by claude to stream in print mode.
+	args := []string{"-p", req.Prompt, "--output-format", "stream-json", "--verbose"}
 	if req.MaxTurns > 0 {
 		args = append(args, "--max-turns", strconv.Itoa(req.MaxTurns))
 	}
@@ -108,8 +123,8 @@ type claudeJSON struct {
 	NumTurns     int     `json:"num_turns"`
 }
 
-// ParseResult parses the JSON envelope emitted by `claude -p --output-format
-// json`.
+// ParseResult parses a claude "result" event — the terminal JSON object of a
+// stream-json run, which carries the final text, cost, and turn count.
 func ParseResult(stdout []byte) (*Result, error) {
 	trimmed := bytes.TrimSpace(stdout)
 	if len(trimmed) == 0 {
@@ -136,8 +151,10 @@ func Available() bool {
 }
 
 // Run invokes claude headlessly for the request and returns the parsed result.
-// It returns ErrClaudeNotFound when claude is absent, and ErrBudgetExceeded
-// (with a non-nil Result) when the run cost exceeds MaxBudgetUSD.
+// It streams the agent's event output, calling req.OnActivity for each tool the
+// agent invokes, and parses the terminal "result" event into the Result. It
+// returns ErrClaudeNotFound when claude is absent, and ErrBudgetExceeded (with a
+// non-nil Result) when the run cost exceeds MaxBudgetUSD.
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if !Available() {
 		return nil, ErrClaudeNotFound
@@ -145,12 +162,33 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	cmd := exec.CommandContext(ctx, binary, BuildArgs(req)...)
 	cmd.Dir = req.WorkDir
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("claude stdout pipe: %w", err)
+	}
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	runErr := cmd.Run()
-	res, parseErr := ParseResult(stdout.Bytes())
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start claude: %w", err)
+	}
+
+	// Read events as they arrive. ReadBytes grows past any line length, so large
+	// tool payloads and the final result event are never truncated.
+	var resultLine []byte
+	reader := bufio.NewReader(stdoutPipe)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if rl := handleStreamLine(line, req.OnActivity); rl != nil {
+			resultLine = rl
+		}
+		if readErr != nil {
+			break // EOF or read error; cmd.Wait surfaces any process failure
+		}
+	}
+
+	runErr := cmd.Wait()
+	res, parseErr := ParseResult(resultLine)
 	if parseErr != nil {
 		if runErr != nil {
 			return nil, fmt.Errorf("claude run failed: %w; stderr: %s", runErr, strings.TrimSpace(stderr.String()))
@@ -165,4 +203,66 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		return res, fmt.Errorf("%w: spent $%.4f, ceiling $%.4f", ErrBudgetExceeded, res.CostUSD, req.MaxBudgetUSD)
 	}
 	return res, nil
+}
+
+// streamEnvelope captures the fields we read from each stream-json event. The
+// terminal "result" event carries the same shape as claudeJSON; "assistant"
+// events carry the content blocks we scan for tool calls.
+type streamEnvelope struct {
+	Type    string `json:"type"`
+	Message struct {
+		Content []struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+	} `json:"message"`
+}
+
+// handleStreamLine processes one line of stream-json output. It emits an
+// Activity for each tool call in an assistant event, and returns the trimmed
+// bytes of a terminal "result" event (nil for every other line) so Run can parse
+// the final outcome. Non-JSON or unparseable lines are ignored.
+func handleStreamLine(line []byte, onActivity func(Activity)) (resultLine []byte) {
+	trimmed := bytes.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return nil
+	}
+	var env streamEnvelope
+	if err := json.Unmarshal(trimmed, &env); err != nil {
+		return nil
+	}
+	switch env.Type {
+	case "result":
+		return trimmed
+	case "assistant":
+		if onActivity == nil {
+			return nil
+		}
+		for _, blk := range env.Message.Content {
+			if blk.Type == "tool_use" {
+				onActivity(Activity{Tool: blk.Name, Target: bestTarget(blk.Input)})
+			}
+		}
+	}
+	return nil
+}
+
+// bestTarget pulls a human-meaningful target out of a tool's input — the file it
+// writes or reads, or the pattern/query it searches — falling back to "" when
+// the tool takes no such argument.
+func bestTarget(input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return ""
+	}
+	for _, key := range []string{"file_path", "path", "notebook_path", "pattern", "query"} {
+		if v, ok := fields[key].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
