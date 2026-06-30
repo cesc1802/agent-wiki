@@ -39,7 +39,53 @@ working directory set to `wiki/`. Hard invariant: the CLI never edits page
 content; the agent may only write page files — `raw/` and the control files are
 read-only and a hook enforces it.
 
+## Install
+
+The fastest path is the install script, which downloads a prebuilt binary from
+[GitHub Releases](https://github.com/cesc1802/agent-wiki/releases), verifies its
+sha256 checksum, and installs it. It supports macOS, Linux, and Windows (Git
+Bash / MSYS / Cygwin) on amd64 and arm64.
+
+```sh
+# Latest release into ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/cesc1802/agent-wiki/master/install.sh | sh
+```
+
+To install as a global binary you can call from anywhere, add `--global` (installs
+to `/usr/local/bin`, which is on `PATH` by default; uses `sudo` when needed):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cesc1802/agent-wiki/master/install.sh | sh -s -- --global
+```
+
+To pin a specific version, pass `--version` (accepts `v1.2.3` or `1.2.3`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cesc1802/agent-wiki/master/install.sh | sh -s -- --version v1.2.3 --global
+```
+
+Options (everything after `sh -s --` is passed to the script):
+
+| Flag | Description |
+| --- | --- |
+| `-v, --version <tag>` | Release tag to install (`v1.2.3` or `1.2.3`). Default: latest release. |
+| `-g, --global` | Install system-wide to `/usr/local/bin`; uses `sudo` when the directory is not writable. |
+| `-d, --bindir <dir>` | Install directory. Default: `$HOME/.local/bin` (or `/usr/local/bin` with `--global`). |
+| `-h, --help` | Show help and exit. |
+
+The `VERSION` and `BINDIR` environment variables are honored as fallbacks when
+the matching flag is absent. If the install directory is not on your `PATH`, the
+script prints the exact `export PATH=...` line to add to your shell profile.
+
+After installing, confirm it resolves:
+
+```sh
+nvtwiki --version
+```
+
 ## Build
+
+To build from source instead:
 
 ```sh
 cd app
