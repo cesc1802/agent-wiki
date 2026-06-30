@@ -1,8 +1,10 @@
 name: lint
 
-# Lints the Go CLI (module lives in app/). Runs on every PR to master, and is
-# reusable (workflow_call) so the release workflow can gate on it too.
+# Lints the Go CLI (module lives in app/). Runs on every push and PR to master,
+# and is reusable (workflow_call) so the release workflow can gate on it too.
 on:
+  push:
+    branches: [master]
   pull_request:
     branches: [master]
   workflow_call:
