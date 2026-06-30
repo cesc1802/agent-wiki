@@ -144,9 +144,19 @@ func ParseResult(stdout []byte) (*Result, error) {
 	}, nil
 }
 
+// Resolve returns the absolute path to the claude executable on PATH, or
+// ErrClaudeNotFound when it is absent.
+func Resolve() (string, error) {
+	path, err := exec.LookPath(binary)
+	if err != nil {
+		return "", ErrClaudeNotFound
+	}
+	return path, nil
+}
+
 // Available reports whether the claude executable is on PATH.
 func Available() bool {
-	_, err := exec.LookPath(binary)
+	_, err := Resolve()
 	return err == nil
 }
 

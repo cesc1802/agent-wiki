@@ -43,6 +43,7 @@ func Execute() int {
 		rawCmd(),
 		queryCmd(),
 		ingestCmd(),
+		authCmd(),
 	)
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -392,6 +393,39 @@ func ingestCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 40, "cap the agent's turns")
 	cmd.Flags().Float64Var(&budget, "budget", 0, "fail if run cost exceeds this many USD (0 = no ceiling)")
 	return cmd
+}
+
+// authCmd groups checks for the external dependencies the agent-backed commands
+// (query, ingest) require. Today that is the Claude Code executable.
+func authCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "auth",
+		Short: "Check the Claude Code dependency the agent commands rely on",
+	}
+	cmd.AddCommand(authStatusCmd())
+	return cmd
+}
+
+// authStatusCmd reports whether the claude executable is reachable on PATH. It
+// exits non-zero when claude is absent so it can gate scripts and CI.
+func authStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Report whether the claude executable is available on PATH",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := orchestrate.Resolve()
+			if err != nil {
+				fmt.Println("claude: not found")
+				fmt.Println("  query and ingest are unavailable until Claude Code is installed and on PATH")
+				exitCode = 1
+				return nil
+			}
+			fmt.Println("claude: found")
+			fmt.Printf("  path: %s\n", path)
+			return nil
+		},
+	}
 }
 
 // snapshotWiki maps each wiki page's relative path to a content hash, for

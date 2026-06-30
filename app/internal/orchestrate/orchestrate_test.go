@@ -2,6 +2,8 @@ package orchestrate
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -142,6 +144,34 @@ func TestBestTarget(t *testing.T) {
 		if got := bestTarget([]byte(c.input)); got != c.want {
 			t.Errorf("bestTarget(%s) = %q, want %q", c.input, got, c.want)
 		}
+	}
+}
+
+func TestResolve(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, binary)
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+
+	t.Setenv("PATH", dir)
+	path, err := Resolve()
+	if err != nil {
+		t.Fatalf("Resolve with claude on PATH: %v", err)
+	}
+	if path != bin {
+		t.Errorf("Resolve path = %q, want %q", path, bin)
+	}
+	if !Available() {
+		t.Error("Available should be true when claude is on PATH")
+	}
+
+	t.Setenv("PATH", "")
+	if _, err := Resolve(); !errors.Is(err, ErrClaudeNotFound) {
+		t.Errorf("Resolve with empty PATH error = %v, want ErrClaudeNotFound", err)
+	}
+	if Available() {
+		t.Error("Available should be false when claude is absent")
 	}
 }
 
