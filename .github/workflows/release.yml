@@ -1,0 +1,98 @@
+name: release
+
+# Runs only when a version tag is pushed. The first job rejects tags that do not
+# point at a commit on master, so lint/test/release never run for off-master tags.
+# Lint and test are reused from lint.yml / test.yml to keep a single source of truth.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required to create the GitHub Release and upload assets
+
+jobs:
+  verify-on-master:
+    name: Verify tag is on master
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Assert tagged commit is an ancestor of master
+        run: |
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "Tag commit $GITHUB_SHA is on master — proceeding."
+          else
+            echo "::error::Tag ${GITHUB_REF_NAME} (commit $GITHUB_SHA) is not on master. Releases must be tagged on master." >&2
+            exit 1
+          fi
+
+  lint:
+    needs: verify-on-master
+    uses: ./.github/workflows/lint.yml
+
+  test:
+    needs: verify-on-master
+    uses: ./.github/workflows/test.yml
+
+  release:
+    name: Build and publish release
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+
+      - name: Build cross-platform binaries
+        working-directory: app
+        env:
+          CGO_ENABLED: "0"
+          BINARY: nvtwiki
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}" # strip leading v for asset filenames
+          LDFLAGS="-s -w -X nvtwiki/internal/cli.version=${TAG}"
+          OUT="${GITHUB_WORKSPACE}/dist"
+          mkdir -p "$OUT"
+
+          # GOOS/GOARCH pairs covering macOS, Windows, and Ubuntu/Linux.
+          targets="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
+
+          for target in $targets; do
+            GOOS="${target%/*}"
+            GOARCH="${target#*/}"
+            name="${BINARY}_${VERSION}_${GOOS}_${GOARCH}"
+            bin="${BINARY}"
+            [ "$GOOS" = "windows" ] && bin="${BINARY}.exe"
+
+            echo "building $name"
+            GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags "$LDFLAGS" -o "$bin" .
+
+            if [ "$GOOS" = "windows" ]; then
+              zip -q "${OUT}/${name}.zip" "$bin"
+            else
+              tar -czf "${OUT}/${name}.tar.gz" "$bin"
+            fi
+            rm -f "$bin"
+          done
+
+          # Single checksums file over every archive, for install.sh verification.
+          ( cd "$OUT" && sha256sum * > checksums.txt )
+          ls -la "$OUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

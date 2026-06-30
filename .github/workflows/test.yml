@@ -1,0 +1,30 @@
+name: test
+
+# Runs the Go test suite (module lives in app/). Runs on every PR to master,
+# and is reusable (workflow_call) so the release workflow can gate on it too.
+on:
+  pull_request:
+    branches: [master]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    name: go test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+
+      - name: Test
+        run: go test ./...
