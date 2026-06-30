@@ -26,11 +26,17 @@ import (
 	"nvtwiki/internal/wiki"
 )
 
+// version is the build version, overridden at release time via
+// -ldflags "-X nvtwiki/internal/cli.version=<tag>". It stays "dev" for local
+// and source builds.
+var version = "dev"
+
 // Execute runs the root command and returns a process exit code.
 func Execute() int {
 	root := &cobra.Command{
 		Use:           "nvtwiki",
 		Short:         "Agent-maintained project knowledge wiki orchestrator",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
